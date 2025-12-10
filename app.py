@@ -12,6 +12,7 @@ CORS(app)
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'rdsprojectsmyself@gmail.com')
+BASE_URL = os.environ.get('BASE_URL', 'http://localhost:5000')
 
 # OAuth Setup
 oauth = OAuth(app)
@@ -34,10 +35,13 @@ def home():
 
 @app.route('/api/auth/google')
 def login():
-    redirect_uri = url_for('authorize', _external=True)
+    # Force the redirect URI to use the production/configured BASE_URL
+    # This avoids issues with http/https proxy mismatches on Render
+    # Ensure this matches "Authorized Redirect URIs" in Google Console
+    redirect_uri = f"{BASE_URL}/api/auth/google/callback"
     return google.authorize_redirect(redirect_uri)
 
-@app.route('/auth/google/callback')
+@app.route('/api/auth/google/callback')
 def authorize():
     token = google.authorize_access_token()
     user_info = google.parse_id_token(token)
