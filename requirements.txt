@@ -1,0 +1,7 @@
+flask
+flask-cors
+yt-dlp
+google-auth
+requests
+gunicorn
+authlib
