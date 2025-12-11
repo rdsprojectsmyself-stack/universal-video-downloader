@@ -1,32 +1,30 @@
 import sqlite3
-from datetime import datetime
+import os
+from contextlib import closing
 
-DB_NAME = 'rds_downloader.db'
+DB_PATH = os.environ.get("DATABASE_URL", "rds_app.db")
 
-def get_db():
-    conn = sqlite3.connect(DB_NAME)
+def get_conn():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    conn = get_db()
-    c = conn.cursor()
-    # Users table
-    # Users table - Updated schema
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            email TEXT,
-            name TEXT,
-            picture TEXT,
-            is_paid BOOLEAN DEFAULT 0,
-            razorpay_customer_id TEXT,
-            created_at TIMESTAMP
+    conn = get_conn()
+    with closing(conn):
+        cur = conn.cursor()
+        # app_settings
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
         )
-    ''')
-    
-    # Payments table
-    c.execute('''
+        """)
+        # payments default = "false"
+        cur.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)", ("payments_enabled", "false"))
+
+        # payments table
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT,
@@ -34,130 +32,69 @@ def init_db():
             payment_id TEXT,
             amount INTEGER,
             status TEXT,
-            created_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    ''')
-    
-    # Check if is_paid column exists (migration for existing db)
-    try:
-        c.execute('SELECT is_paid FROM users LIMIT 1')
-    except sqlite3.OperationalError:
-        print("Migrating users table: adding is_paid column")
-        c.execute('ALTER TABLE users ADD COLUMN is_paid BOOLEAN DEFAULT 0')
-        c.execute('ALTER TABLE users ADD COLUMN razorpay_customer_id TEXT')
-        
+        """)
+        # downloads table
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS downloads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            platform TEXT,
+            video_url TEXT,
+            format TEXT,
+            quality TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        conn.commit()
+
+def get_app_config():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT key, value FROM app_settings")
+    rows = {r["key"]: r["value"] for r in cur.fetchall()}
+    return rows
+
+def set_payments_enabled(enabled: bool):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)", ("payments_enabled", "true" if enabled else "false"))
     conn.commit()
-    conn.close()
 
-def add_user(user_info):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        # Check if user exists to preserve is_paid status if re-logging in
-        c.execute('SELECT is_paid FROM users WHERE id = ?', (user_info['sub'],))
-        row = c.fetchone()
-        
-        if not row:
-            c.execute('''
-                INSERT INTO users (id, email, name, picture, is_paid, created_at)
-                VALUES (?, ?, ?, ?, 0, ?)
-            ''', (user_info['sub'], user_info['email'], user_info.get('name'), user_info.get('picture'), datetime.utcnow()))
-        else:
-            # Update user info but keep payment status
-            c.execute('''
-                UPDATE users SET email=?, name=?, picture=? WHERE id=?
-            ''', (user_info['email'], user_info.get('name'), user_info.get('picture'), user_info['sub']))
-            
-        conn.commit()
-    except Exception as e:
-        print(f"Error adding/updating user: {e}")
-    finally:
-        conn.close()
-
-def log_download(user_id, platform, video_url, fmt, quality):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''
-            INSERT INTO downloads (user_id, platform, video_url, format, quality, downloaded_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (user_id, platform, video_url, fmt, quality, datetime.utcnow()))
-        conn.commit()
-    except Exception as e:
-        print(f"Error logging download: {e}")
-    finally:
-        conn.close()
-
-def create_payment(user_id, order_id, amount, status='created'):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''
-            INSERT INTO payments (user_id, order_id, amount, status, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, order_id, amount, status, datetime.utcnow()))
-        conn.commit()
-    except Exception as e:
-        print(f"Error creating payment: {e}")
-    finally:
-        conn.close()
+def create_payment(user_id, order_id, amount):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO payments (user_id, order_id, amount, status) VALUES (?, ?, ?, ?)", (user_id, order_id, amount, "created"))
+    conn.commit()
 
 def update_payment(order_id, payment_id, status):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''
-            UPDATE payments SET payment_id=?, status=? WHERE order_id=?
-        ''', (payment_id, status, order_id))
-        
-        if status == 'captured':
-            # Get user_id from payment to update user status
-            c.execute('SELECT user_id FROM payments WHERE order_id=?', (order_id,))
-            row = c.fetchone()
-            if row:
-                user_id = row['user_id']
-                c.execute('UPDATE users SET is_paid=1 WHERE id=?', (user_id,))
-                
-        conn.commit()
-    except Exception as e:
-        print(f"Error updating payment: {e}")
-    finally:
-        conn.close()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE payments SET payment_id = ?, status = ? WHERE order_id = ?", (payment_id, status, order_id))
+    conn.commit()
 
-def get_user_status(user_id):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('SELECT is_paid FROM users WHERE id=?', (user_id,))
-    row = c.fetchone()
-    conn.close()
-    return row['is_paid'] if row else False
-
+def log_download(user_id, platform, video_url, fmt, quality):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO downloads (user_id, platform, video_url, format, quality) VALUES (?, ?, ?, ?, ?)", (user_id, platform, video_url, fmt, quality))
+    conn.commit()
 
 def get_stats():
-    conn = get_db()
-    c = conn.cursor()
-    
-    # Total downloads
-    c.execute('SELECT COUNT(*) FROM downloads')
-    total_downloads = c.fetchone()[0]
-    
-    # Active users (unique users who downloaded)
-    c.execute('SELECT COUNT(DISTINCT user_id) FROM downloads')
-    active_users = c.fetchone()[0]
-    
-    # Platform stats
-    c.execute('SELECT platform, COUNT(*) as count FROM downloads GROUP BY platform')
-    platform_stats = {row['platform']: row['count'] for row in c.fetchall()}
-    
-    conn.close()
+    conn = get_conn()
+    cur = conn.cursor()
+    # total downloads
+    cur.execute("SELECT COUNT(*) as c FROM downloads")
+    total_downloads = cur.fetchone()["c"]
+    # active users (unique user_id)
+    cur.execute("SELECT COUNT(DISTINCT user_id) as c FROM downloads")
+    active_users = cur.fetchone()["c"]
+    # platform distribution
+    cur.execute("SELECT platform, COUNT(*) as cnt FROM downloads GROUP BY platform")
+    rows = cur.fetchall()
+    platform_stats = {r["platform"] if r["platform"] else "unknown": r["cnt"] for r in rows}
     return {
-        'total_downloads': total_downloads,
-        'active_users': active_users,
-        'platform_stats': platform_stats
+        "total_downloads": total_downloads,
+        "active_users": active_users,
+        "platform_stats": platform_stats
     }
-
-# Initialize on module load or manually
-if __name__ == '__main__':
-    init_db()
-    print("Database initialized.")

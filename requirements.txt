@@ -1,8 +1,6 @@
-flask
-flask-cors
-yt-dlp
-google-auth
-requests
+Flask>=2.0
 gunicorn
+flask-cors
 authlib
+yt-dlp
 razorpay
