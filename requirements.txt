@@ -1,6 +1,0 @@
-Flask>=2.0
-gunicorn
-flask-cors
-authlib
-yt-dlp
-razorpay
