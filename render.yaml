@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: rds-video-backend
+    env: docker
+    plan: free
+    region: oregon
+    dockerfilePath: Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: ADMIN_EMAIL
+      - key: BASE_URL
+      - key: FRONTEND_URL
+      - key: GOOGLE_CLIENT_ID
+      - key: GOOGLE_CLIENT_SECRET
+      - key: RAZORPAY_KEY_ID
+      - key: RAZORPAY_KEY_SECRET
+      - key: SESSION_SECRET
